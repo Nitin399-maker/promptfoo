@@ -1,0 +1,30 @@
+description: Testing LLM Mathematical Reasoning and Code Generation - Comparing model performance on multi-step problem solving with different prompt approaches
+
+providers:
+  - id: openrouter:anthropic/claude-3.5-sonnet
+    config:
+      apiKey: your_openrouter_key
+      max_tokens: 8192
+
+defaultTest:
+  assert: []
+  vars: {}
+
+tests:
+  - description: Testing LLM Mathematical Reasoning and Code Generation - Comparing model performance on multi-step problem solving with different prompt approaches - Test 1
+    vars:
+      prompt: |-
+        You are a helpful AI assistant. Solve this step by step:
+        Problem: {{problem}}
+        Please show your work and provide the final answer clearly.
+      problem: A store sells apples for $2 per pound and oranges for $3 per pound. If someone buys 4 pounds of apples and 2 pounds of oranges, and pays with a $20 bill, how much change should they receive?
+    assert:
+      - type: contains
+        value: $6
+        weight: 2
+        metric: correct_calculation
+
+writeLatestResults: true
+
+commandLineOptions:
+  cache: true

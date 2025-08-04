@@ -8,7 +8,7 @@ prompts:
 providers:
   - id: "openrouter:openai/gpt-4.1-nano"
     config:
-      apiKey: "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"
+      apiKey: "your_openai_api_key"
       max_tokens: 8192
 
 tests:

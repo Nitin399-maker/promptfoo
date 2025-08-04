@@ -6,381 +6,365 @@
 </head>
 <body>
     <h1>Promptfoo Configuration Runner</h1>
-    
     <input type="file" id="configFile" accept=".yaml,.yml" />
     <br /><br />
-    
     <button id="runEval" disabled>Run Promptfoo Evaluation</button>
     <button id="clearOutput">Clear</button>
+    <button id="resetContainer">Reset Container</button>
+    <button id="downloadResults" disabled>Download Results</button>
     <br /><br />
-    
     <div id="logs" style="border:1px solid #ccc; margin-top:10px; padding:10px; height:200px; overflow-y:auto; background:#f5f5f5; font-family:monospace; font-size:12px;"></div>
-    
     <div id="output" style="border:1px solid #ccc; margin-top:10px; padding:10px; height:400px; overflow-y:auto; white-space:pre-wrap; font-family:monospace;"></div>
+    
     <script type="module">
         import { WebContainer } from "https://cdn.jsdelivr.net/npm/@webcontainer/api@1.5.3/+esm";
-        
         let webcontainerInstance;
+        let isContainerInitialized = false;
         let configContent = null;
-        const configFile = document.getElementById('configFile');
-        const runButton = document.getElementById('runEval');
-        const clearButton = document.getElementById('clearOutput');
-        const logsDiv = document.getElementById('logs');
-        const outputDiv = document.getElementById('output');
+        const elements = {
+            configFile: document.getElementById('configFile'),
+            runButton: document.getElementById('runEval'),
+            clearButton: document.getElementById('clearOutput'),
+            resetButton: document.getElementById('resetContainer'),
+            logsDiv: document.getElementById('logs'),
+            outputDiv: document.getElementById('output'),
+            downloadButton: document.getElementById('downloadResults')
+        };
         
         function log(message) {
             const timestamp = new Date().toLocaleTimeString();
-            logsDiv.innerHTML += `[${timestamp}] ${message}\n`;
-            logsDiv.scrollTop = logsDiv.scrollHeight;
+            elements.logsDiv.innerHTML += `[${timestamp}] ${message}\n`;
+            elements.logsDiv.scrollTop = elements.logsDiv.scrollHeight;
         }
         
-        // Handle file upload
-        configFile.addEventListener('change', async (event) => {
-            const file = event.target.files[0];
-            if (file) {
-                configContent = await file.text();
-                runButton.disabled = false;
-                log(`📁 Config file loaded: ${file.name}`);
-            }
-        });
+        function enableDownloadButton(jsonContent, fileName = 'results.json') {
+            elements.downloadButton.disabled = false;
+            elements.downloadButton.onclick = () => {
+                const blob = new Blob([jsonContent], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+        }
         
-        // Boot WebContainer and install promptfoo
-        async function initWebContainer() {
-            log('🚀 Booting WebContainer...');
-            const wc = await WebContainer.boot();
-            log('✅ WebContainer booted');
-            
-            // Create multiple telemetry disable methods
-            log('📦 Disabling telemetry (multiple methods)...');
-            
-            // Method 1: Environment variables
-            await wc.fs.writeFile('.env', `NO_TELEMETRY=1
-                    PROMPTFOO_DISABLE_TELEMETRY=1
-                    PROMPTFOO_NO_TELEMETRY=true
-                    DO_NOT_TRACK=1
-                    CI=true
-                    `);
-            log('✅ Created .env file');
-            
-            // Method 2: Create promptfoo config to disable telemetry
-            try {
-                await wc.fs.mkdir('.promptfoo', { recursive: true });
-                await wc.fs.writeFile('.promptfoo/config.json', JSON.stringify({
-                    telemetry: false,
-                    disableTelemetry: true
-                }, null, 2));
-                log('✅ Created promptfoo config');
-            } catch (e) {
-                log(`⚠️ Could not create promptfoo config: ${e.message}`);
+        async function readProcessOutput(process, logPrefix = '') {
+            let capturedOutput = '';
+            if (!process.output) {
+                return capturedOutput;
             }
+            const reader = process.output.getReader();
             
-            log('📝 Creating package.json...');
-            await wc.fs.writeFile('package.json', JSON.stringify({
-                name: 'promptfoo-runner',
-                version: '1.0.0',
-                private: true,
-                dependencies: {
-                    'promptfoo': '^0.67.0'
-                }
-            }, null, 2));
-            log('✅ package.json created');
-            
-            log('📦 Installing promptfoo...');
-            const installProcess = await wc.spawn('npm', ['install'], {
-                env: {
-                    NO_TELEMETRY: '1',
-                    PROMPTFOO_DISABLE_TELEMETRY: '1',
-                    DO_NOT_TRACK: '1',
-                    CI: 'true'
-                }
-            });
-            
-            let installCompleted = false;
-            
-            // Better output handling for npm install
-            const handleInstallOutput = async () => {
-                if (!installProcess.output) return;
-                
-                const reader = installProcess.output.getReader();
+            const readOutput = async () => {
                 try {
                     while (true) {
                         const { done, value } = await reader.read();
-                        if (done) {
-                            log('📦 npm install output stream ended');
-                            break;
-                        }
-                        
-                        // Handle both string and Uint8Array
+                        if (done) break;
                         let text = '';
-                        if (typeof value === 'string') {
-                            text = value;
-                        } else if (value instanceof Uint8Array) {
-                            text = new TextDecoder().decode(value);
-                        }
-                        
-                        if (text) {
-                            const lines = text.split('\n').filter(line => line.trim());
-                            lines.forEach(line => {
-                                if (line.trim()) {
-                                    log(`npm: ${line.trim()}`);
-                                }
-                            });
-                        }
-                    }
-                } catch (e) {
-                    log(`⚠️ Install stream error: ${e.message}`);
-                } finally {
-                    try {
-                        reader.releaseLock();
-                    } catch (e) {
-                        // Reader already released
-                    }
-                }
-            };
-            
-            // Wait for both output processing and process exit
-            const [exitCode] = await Promise.all([
-                installProcess.exit,
-                handleInstallOutput().catch(e => log(`Output handling error: ${e.message}`))
-            ]);
-            
-            log(`📦 npm install process exited with code: ${exitCode}`);
-            
-            if (exitCode !== 0) {
-                throw new Error(`npm install failed with exit code ${exitCode}`);
-            }
-            
-            log('✅ promptfoo installed successfully');
-            
-            // Verify installation
-            try {
-                const verifyProcess = await wc.spawn('npx', ['promptfoo', '--version']);
-                const verifyExitCode = await verifyProcess.exit;
-                log(`🔍 Promptfoo version check exit code: ${verifyExitCode}`);
-            } catch (e) {
-                log(`⚠️ Could not verify promptfoo installation: ${e.message}`);
-            }
-            
-            return wc;
-        }
-
-        // Run promptfoo evaluation
-        async function runPromptfooEvaluation(wc, configContent) {
-            log('📝 Writing config file...');
-            await wc.fs.writeFile('promptfooconfig.yaml', configContent);
-            log('✅ Config file written');
-            
-            log('⚡ Running promptfoo eval...');
-            
-            // Run with comprehensive telemetry disabling
-            const evalProcess = await wc.spawn('npx', ['promptfoo', 'eval'], {
-                env: {
-                    NO_TELEMETRY: '1',
-                    PROMPTFOO_DISABLE_TELEMETRY: '1',
-                    PROMPTFOO_NO_TELEMETRY: 'true',
-                    DO_NOT_TRACK: '1',
-                    CI: 'true',
-                    NODE_ENV: 'production'
-                }
-            });
-            
-            let output = '';
-            let evalCompleted = false;
-            
-            // Monitor evaluation output with timeout
-            const handleEvalOutput = async () => {
-                if (!evalProcess.output) return;
-                
-                const reader = evalProcess.output.getReader();
-                try {
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) {
-                            log('⚡ eval output stream ended');
-                            break;
-                        }
-                        
-                        let text = '';
-                        if (typeof value === 'string') {
-                            text = value;
-                        } else if (value instanceof Uint8Array) {
-                            text = new TextDecoder().decode(value);
-                        }
-                        
-                        if (text) {
-                            output += text;
-                            
-                            // Log real-time output
-                            const lines = text.split('\n').filter(line => line.trim());
-                            lines.forEach(line => {
-                                if (line.trim()) {
-                                    log(`eval: ${line.trim()}`);
-                                }
-                            });
-                        }
-                    }
-                } catch (error) {
-                    log(`⚠️ Output stream error: ${error.message}`);
-                } finally {
-                    try {
-                        reader.releaseLock();
-                    } catch (e) {
-                        // Reader already released
-                    }
-                }
-            };
-            
-            // Add timeout to prevent hanging
-            const timeoutPromise = new Promise((resolve) => {
-                setTimeout(() => {
-                    log('⏰ Adding 30 second timeout for eval process...');
-                    resolve('timeout');
-                }, 30000);
-            });
-            
-            try {
-                const result = await Promise.race([
-                    Promise.all([
-                        evalProcess.exit,
-                        handleEvalOutput().catch(e => log(`Eval output error: ${e.message}`))
-                    ]),
-                    timeoutPromise
-                ]);
-                
-                if (result === 'timeout') {
-                    log('⚠️ Evaluation timed out after 30 seconds');
-                    // Try to kill the process
-                    try {
-                        evalProcess.kill();
-                    } catch (e) {
-                        log(`⚠️ Could not kill process: ${e.message}`);
-                    }
-                } else {
-                    const [exitCode] = result;
-                    log(`📊 Evaluation finished (exit code: ${exitCode})`);
-                }
-            } catch (error) {
-                log(`❌ Evaluation error: ${error.message}`);
-            }
-            
-            // Try to read output files
-            let fileOutputs = '';
-            try {
-                const files = await wc.fs.readdir('.');
-                log(`📂 Files found: ${files.join(', ')}`);
-                
-                const outputFiles = files.filter(f => 
-                    f.includes('output') || 
-                    f.includes('result') || 
-                    f.includes('eval') ||
-                    f.startsWith('promptfoo') ||
-                    (f.endsWith('.json') && !f.includes('package') && !f.includes('lock')) ||
-                    (f.endsWith('.csv')) ||
-                    (f.endsWith('.html'))
-                );
-                
-                log(`📄 Potential output files: ${outputFiles.join(', ')}`);
-                
-                for (const file of outputFiles) {
-                    try {
-                        const stats = await wc.fs.stat(file);
-                        if (stats.isFile()) {
-                            const content = await wc.fs.readFile(file, { encoding: 'utf-8' });
-                            fileOutputs += `\n\n=== ${file} ===\n${content}`;
-                            log(`📄 Read output file: ${file}`);
-                        }
-                    } catch (e) {
-                        log(`⚠️ Could not read: ${file} - ${e.message}`);
-                    }
-                }
-                
-                // Check for .promptfoo directory
-                try {
-                    const stats = await wc.fs.stat('.promptfoo');
-                    if (stats.isDirectory()) {
-                        const promptfooFiles = await wc.fs.readdir('.promptfoo');
-                        log(`📂 .promptfoo files: ${promptfooFiles.join(', ')}`);
-                        
-                        for (const file of promptfooFiles) {
-                            if (file.endsWith('.json') || file.endsWith('.html') || file.endsWith('.csv')) {
+                        try {
+                            if (typeof value === 'string') {
+                                text = value;
+                            } else if (value instanceof Uint8Array) {
+                                text = new TextDecoder('utf-8', { fatal: false }).decode(value);
+                            } else if (value && typeof value.toString === 'function') {
+                                text = value.toString();
+                            }
+                            if (text) {
+                                capturedOutput += text;
+                                const lines = text.split('\n').filter(line => line.trim());
+                                lines.forEach(line => {
+                                    if (line.trim() && logPrefix) {
+                                        log(`${logPrefix}: ${line.trim()}`);
+                                    }
+                                });
+                            }
+                        } catch (decodeError) {
+                            log(`⚠️ Decode warning: ${decodeError.message}`);
+                            if (value && value.length) {
                                 try {
-                                    const filePath = `.promptfoo/${file}`;
-                                    const fileStats = await wc.fs.stat(filePath);
-                                    if (fileStats.isFile()) {
-                                        const content = await wc.fs.readFile(filePath, { encoding: 'utf-8' });
-                                        fileOutputs += `\n\n=== .promptfoo/${file} ===\n${content}`;
-                                        log(`📄 Read promptfoo file: ${file}`);
+                                    text = String.fromCharCode.apply(null, Array.from(value).filter(code => code < 128 && code > 31));
+                                    if (text.trim()) {
+                                        capturedOutput += text;
+                                        if (logPrefix) log(`${logPrefix}: ${text.trim()}`);
                                     }
                                 } catch (e) {
-                                    log(`⚠️ Could not read .promptfoo/${file}: ${e.message}`);
                                 }
                             }
                         }
                     }
                 } catch (e) {
-                    log('⚠️ No .promptfoo directory found');
+                    if (e.name !== 'AbortError') {log(`⚠️ Stream read error: ${e.message}`);}
+                }
+            };
+            
+            try {
+                await Promise.race([
+                    readOutput(),
+                    process.exit.then(() => {
+                        return new Promise(resolve => setTimeout(resolve, 1000));
+                    })
+                ]);
+            } catch (e) { log(`⚠️ Output reading error: ${e.message}`);
+            } finally {
+                try { reader.releaseLock(); } catch (e) {}
+            }
+            return capturedOutput;
+        }
+        
+        async function initWebContainer() {
+            if (isContainerInitialized && webcontainerInstance) {
+                return webcontainerInstance;
+            }
+            const wc = await WebContainer.boot();
+            log('✅ WebContainer booted');
+            // Create environment configuration
+            const envConfig = `NO_TELEMETRY=1
+                                PROMPTFOO_DISABLE_TELEMETRY=1
+                                PROMPTFOO_NO_TELEMETRY=true
+                                DO_NOT_TRACK=1
+                                CI=true
+                                PROMPTFOO_DISABLE_UPDATE=1
+                                PROMPTFOO_DISABLE_DATABASE=1`;
+            await wc.fs.writeFile('.env', envConfig);
+            log('✅ Environment configured');
+            const packageJson = {
+                name: 'promptfoo-runner',
+                version: '1.0.0',
+                private: true,
+                dependencies: { 'promptfoo': '^0.67.0' }
+            };
+            await wc.fs.writeFile('package.json', JSON.stringify(packageJson, null, 2));
+            log('✅ package.json created');
+            log('📦 Installing promptfoo...');
+            const installProcess = await wc.spawn('npm', ['install'], {
+                env: { PROMPTFOO_DISABLE_TELEMETRY: '1', CI: 'true',PROMPTFOO_DISABLE_UPDATE:'1' }
+            });
+            const exitCode = await installProcess.exit;
+            if (exitCode !== 0) { throw new Error(`npm install failed with exit code ${exitCode}`);}
+            log('✅ promptfoo installed successfully');
+            webcontainerInstance = wc;
+            isContainerInitialized = true;
+            elements.resetButton.disabled = false;
+            return wc;
+        }
+        
+        async function cleanupPreviousRun(wc) {
+            log('🧹 Cleaning up previous files...');
+            try {
+                const files = await wc.fs.readdir('.');
+                const filesToDelete = files.filter(f => 
+                    f.includes('result') || f.includes('output') || f.includes('eval') ||
+                    (f.endsWith('.json') && !f.includes('package'))
+                );
+                await Promise.all(filesToDelete.map(async file => {
+                    try {
+                        await wc.fs.unlink(file);
+                        log(`🗑️ Deleted: ${file}`);
+                    } catch (e) {}
+                }));
+                
+                log('✅ Cleanup completed');
+            } catch (e) {
+                log(`⚠️ Cleanup warning: ${e.message}`);
+            }
+        }
+        
+        function parseEvaluationResults(capturedOutput) {
+            log('🔍 Parsing evaluation results...');
+            
+            const results = {
+                version: "promptfoo-webcontainer",
+                timestamp: new Date().toISOString(),
+                results: []
+            };
+            
+            const lines = capturedOutput.split('\n');
+            let currentTest = null;
+            
+            for (const line of lines) {
+                if (line.includes('Calling OpenAI API:')) {
+                    try {
+                        const apiCall = JSON.parse(line.split('Calling OpenAI API: ')[1]);
+                        currentTest = {
+                            prompt: apiCall.messages?.[0]?.content || apiCall.prompt || '',
+                            provider: 'openai',
+                            model: apiCall.model,
+                            request: apiCall
+                        };
+                    } catch (e) {
+                        log(`⚠️ Could not parse API call: ${e.message}`);
+                    }
                 }
                 
-            } catch (e) {
-                log(`⚠️ Could not scan for output files: ${e.message}`);
+                if (line.includes('API response:') && currentTest) {
+                    try {
+                        const response = JSON.parse(line.split('API response: ')[1]);
+                        currentTest.response = response;
+                        currentTest.output = response.choices?.[0]?.message?.content || 
+                                           response.choices?.[0]?.text || 'No output found';
+                        currentTest.usage = response.usage || {};
+                        results.results.push(currentTest);
+                        log(`📝 Parsed test result`);
+                    } catch (e) {
+                        log(`⚠️ Could not parse API response: ${e.message}`);
+                    }
+                }
             }
+            
+            results.stats = {
+                totalTests: results.results.length,
+                totalTokens: results.results.reduce((sum, r) => sum + (r.usage?.total_tokens || 0), 0)
+            };
+            
+            log(`✅ Parsed ${results.results.length} test results`);
+            return results;
+        }
+        
+        async function runPromptfooEvaluation(wc, configContent) {
+            await cleanupPreviousRun(wc);
+            
+            log('📝 Writing config file...');
+            await wc.fs.writeFile('promptfooconfig.yaml', configContent);
+            
+            log('⚡ Running promptfoo eval...');
+            const evalProcess = await wc.spawn('npx', ['promptfoo', 'eval', '--verbose', '--no-cache', '--no-write', '--output', 'result.json'], {
+                env: {
+                    PROMPTFOO_DISABLE_TELEMETRY: '1',
+                    CI: 'true',
+                    PROMPTFOO_DISABLE_DATABASE: '1',
+                    PROMPTFOO_DISABLE_UPDATE: '1'
+                }
+            });
+            
+            const [capturedOutput, exitCode] = await Promise.all([
+                readProcessOutput(evalProcess),
+                evalProcess.exit
+            ]);
+            
+            log(`📊 Evaluation finished with exit code: ${exitCode}`);
+            
+            const hasResults = capturedOutput.includes('API response:') || capturedOutput.includes('Eval #');
+            const isDbError = capturedOutput.includes('better-sqlite3') || capturedOutput.includes('database migrations');
+            const actualSuccess = hasResults;
+            
+            let exportResults = '';
+            
+            if (actualSuccess) {
+                try {
+                    const resultContent = await wc.fs.readFile('result.json', { encoding: 'utf-8' });
+                    exportResults = `\n\n=== RESULTS ===\n${resultContent}`;
+                    enableDownloadButton(resultContent, 'result.json');
+                    log('✅ Successfully read result.json');
+                } catch (e) {
+                    log('⚠️ Generating results from output...');
+                    const generatedResults = parseEvaluationResults(capturedOutput);
+                    const generatedJson = JSON.stringify(generatedResults, null, 2);
+                    
+                    try {
+                        await wc.fs.writeFile('result-generated.json', generatedJson);
+                        enableDownloadButton(generatedJson, 'result-generated.json');
+                    } catch (e) {}
+                    
+                    exportResults = `\n\n=== GENERATED RESULTS ===\n${generatedJson}`;
+                }
+            }
+            
+            let errorDetails = '';
+            if (!hasResults && !configContent.includes('prompts:')) {
+                errorDetails = `\n\n🔧 CONFIGURATION ERROR:
+Your config is missing the "prompts:" section.
+Required structure:
+- providers: (your provider config)
+- prompts: (your prompts)
+- tests: (your test cases)`;
+            }
+            
+            const status = actualSuccess ? 'SUCCESS' : 'FAILED';
+            const dbNote = isDbError && hasResults ? '\n⚠️ Note: Database save failed but evaluation completed successfully.\n' : '';
             
             return `PROMPTFOO EVALUATION RESULTS
 ====================================
-Timestamp: ${new Date().toISOString()}
+Status: ${status}
+Exit Code: ${exitCode}
+Timestamp: ${new Date().toISOString()}${dbNote}
 
 Console Output:
-${output || 'No console output captured'}
-
-Generated Files:${fileOutputs || '\nNo output files found'}
+${capturedOutput || 'No output captured'}${errorDetails}${exportResults}
 ====================================`;
         }
         
-        // Run evaluation button
-        runButton.addEventListener('click', async () => {
+        // Event listeners
+        elements.configFile.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                configContent = await file.text();
+                elements.runButton.disabled = false;
+                log(`✅ Config file loaded: ${file.name}`);
+            }
+        });
+        
+        elements.runButton.addEventListener('click', async () => {
             if (!configContent) {
                 log('❌ No config file loaded');
                 return;
             }
             
             try {
-                runButton.disabled = true;
-                runButton.textContent = 'Running...';
-                outputDiv.textContent = 'Initializing...';
+                elements.runButton.disabled = true;
+                elements.runButton.textContent = 'Running...';
+                elements.outputDiv.textContent = 'Initializing...';
                 
-                if (!webcontainerInstance) {
-                    log('🔄 Initializing WebContainer...');
+                if (!isContainerInitialized) {
                     webcontainerInstance = await initWebContainer();
-                    log('✅ WebContainer initialization completed');
+                } else {
+                    log('🔄 Using existing WebContainer instance');
                 }
                 
-                log('🚀 Starting evaluation...');
                 const result = await runPromptfooEvaluation(webcontainerInstance, configContent);
-                outputDiv.textContent = result;
-                log('🎉 Evaluation process completed!');
-                
+                elements.outputDiv.textContent = result;
+                log('🎉 Evaluation completed!');
             } catch (error) {
                 log(`❌ Error: ${error.message}`);
-                outputDiv.textContent = `Error: ${error.message}\n\nStack trace:\n${error.stack}\n\nCheck logs for details.`;
+                elements.outputDiv.textContent = `Error: ${error.message}\n\nCheck logs for details.`;
                 console.error('Full error:', error);
-                
             } finally {
-                runButton.disabled = false;
-                runButton.textContent = 'Run Promptfoo Evaluation';
+                elements.runButton.disabled = false;
+                elements.runButton.textContent = 'Run Promptfoo Evaluation';
             }
         });
         
-        // Clear output
-        clearButton.addEventListener('click', () => {
-            logsDiv.innerHTML = '';
-            outputDiv.textContent = '';
+        elements.resetButton.addEventListener('click', async () => {
+            try {
+                elements.resetButton.disabled = true;
+                elements.resetButton.textContent = 'Resetting...';
+                log('🔄 Resetting WebContainer...');
+                
+                webcontainerInstance = null;
+                isContainerInitialized = false;
+                elements.resetButton.disabled = true;
+                
+                log('✅ Container reset');
+            } catch (error) {
+                log(`❌ Reset error: ${error.message}`);
+            } finally {
+                elements.resetButton.textContent = 'Reset Container';
+            }
+        });
+        
+        elements.clearButton.addEventListener('click', () => {
+            elements.logsDiv.innerHTML = '';
+            elements.outputDiv.textContent = '';
+            elements.downloadButton.disabled = true;
             log('🧹 Output cleared');
         });
         
-        // Check if WebContainer is available
+        // Initialize
+        elements.resetButton.disabled = true;
+        
         if (!crossOriginIsolated) {
             log('❌ WebContainer requires Cross-Origin Isolation headers');
-            log('Deploy to Netlify/Vercel or serve with proper headers');
         } else {
             log('✅ WebContainer environment ready');
         }

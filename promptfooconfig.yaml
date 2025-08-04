@@ -1,30 +1,21 @@
-description: Testing LLM Mathematical Reasoning and Code Generation - Comparing model performance on multi-step problem solving with different prompt approaches
+# Converted promptfoo configuration
+prompts:
+  - |
+    You are a helpful AI assistant. Solve this step by step:
+    Problem: {{problem}}
+    Please show your work and provide the final answer clearly.
 
 providers:
-  - id: openrouter:anthropic/claude-3.5-sonnet
+  - id: "openrouter:openai/gpt-4.1-nano"
     config:
-      apiKey: your_openrouter_key
+      apiKey: "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"
       max_tokens: 8192
 
-defaultTest:
-  assert: []
-  vars: {}
-
 tests:
-  - description: Testing LLM Mathematical Reasoning and Code Generation - Comparing model performance on multi-step problem solving with different prompt approaches - Test 1
-    vars:
-      prompt: |-
-        You are a helpful AI assistant. Solve this step by step:
-        Problem: {{problem}}
-        Please show your work and provide the final answer clearly.
+  - vars:
       problem: A store sells apples for $2 per pound and oranges for $3 per pound. If someone buys 4 pounds of apples and 2 pounds of oranges, and pays with a $20 bill, how much change should they receive?
     assert:
       - type: contains
-        value: $6
+        value: "$6"
         weight: 2
         metric: correct_calculation
-
-writeLatestResults: true
-
-commandLineOptions:
-  cache: true
